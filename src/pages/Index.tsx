@@ -1,11 +1,16 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import Icon from '@/components/ui/icon';
 import { useToast } from '@/hooks/use-toast';
+
+const API_AUTH = 'https://functions.poehali.dev/7f5d84ad-6192-47be-97e0-f3cf57104b18';
+const API_ADMIN = 'https://functions.poehali.dev/3f10c33f-9e2a-417d-9276-96e8c6c3309d';
+const API_GAME = 'https://functions.poehali.dev/538685aa-545d-430f-b69c-1e735f2a8b67';
 
 type User = {
   id: string;
@@ -31,36 +36,80 @@ const games: Game[] = [
 
 export default function Index() {
   const [isAuthOpen, setIsAuthOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [user, setUser] = useState<User | null>(null);
   const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [selectedGame, setSelectedGame] = useState<Game | null>(null);
+  const [betAmount, setBetAmount] = useState('');
   const [adminUserId, setAdminUserId] = useState('');
   const [adminAmount, setAdminAmount] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
   const { toast } = useToast();
 
-  const handleAuth = () => {
-    if (!username.trim()) {
-      toast({ title: 'Ошибка', description: 'Введите никнейм', variant: 'destructive' });
+  useEffect(() => {
+    const savedUser = localStorage.getItem('casinoUser');
+    if (savedUser) {
+      setUser(JSON.parse(savedUser));
+    }
+  }, []);
+
+  const handleAuth = async () => {
+    if (!username.trim() || !password.trim()) {
+      toast({ title: 'Ошибка', description: 'Заполните все поля', variant: 'destructive' });
       return;
     }
     
-    const userId = `ID${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
-    const newUser: User = {
-      id: userId,
-      username: username.trim(),
-      balance: 100,
-      isAdmin: username.toLowerCase() === 'admin'
-    };
-    
-    setUser(newUser);
-    setIsAuthOpen(false);
-    toast({ 
-      title: '🎰 Добро пожаловать!', 
-      description: `${newUser.username}, ваш ID: ${userId}` 
-    });
+    setIsLoading(true);
+    try {
+      const response = await fetch(API_AUTH, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: authMode,
+          username: username.trim(),
+          password: password.trim()
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        toast({ title: 'Ошибка', description: data.error, variant: 'destructive' });
+        return;
+      }
+      
+      const newUser: User = {
+        id: data.id,
+        username: data.username,
+        balance: data.balance,
+        isAdmin: data.isAdmin
+      };
+      
+      setUser(newUser);
+      localStorage.setItem('casinoUser', JSON.stringify(newUser));
+      setIsAuthOpen(false);
+      setUsername('');
+      setPassword('');
+      
+      toast({ 
+        title: authMode === 'register' ? '🎰 Регистрация успешна!' : '🎰 Добро пожаловать!',
+        description: `${newUser.username}, ваш ID: ${newUser.id}` 
+      });
+    } catch (error) {
+      toast({ title: 'Ошибка', description: 'Не удалось подключиться к серверу', variant: 'destructive' });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleAddBalance = () => {
+  const handleLogout = () => {
+    setUser(null);
+    localStorage.removeItem('casinoUser');
+    toast({ title: 'Выход выполнен', description: 'До скорой встречи!' });
+  };
+
+  const handleAddBalance = async () => {
     if (!user?.isAdmin) return;
     
     const amount = parseFloat(adminAmount);
@@ -69,12 +118,101 @@ export default function Index() {
       return;
     }
     
-    toast({ 
-      title: '✅ Баланс начислен', 
-      description: `${amount}₽ добавлено на ID: ${adminUserId}` 
-    });
-    setAdminUserId('');
-    setAdminAmount('');
+    setIsLoading(true);
+    try {
+      const response = await fetch(API_ADMIN, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          adminId: user.id,
+          targetUserId: adminUserId,
+          amount: amount
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        toast({ title: 'Ошибка', description: data.error, variant: 'destructive' });
+        return;
+      }
+      
+      toast({ 
+        title: '✅ Баланс начислен', 
+        description: `${data.amountAdded}₽ → ${data.targetUsername} (${data.targetUserId})` 
+      });
+      setAdminUserId('');
+      setAdminAmount('');
+    } catch (error) {
+      toast({ title: 'Ошибка', description: 'Не удалось выполнить операцию', variant: 'destructive' });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handlePlayGame = async () => {
+    if (!selectedGame || !user) return;
+    
+    const bet = parseFloat(betAmount);
+    if (isNaN(bet) || bet < selectedGame.minBet) {
+      toast({ 
+        title: 'Ошибка', 
+        description: `Минимальная ставка: ${selectedGame.minBet}₽`,
+        variant: 'destructive' 
+      });
+      return;
+    }
+    
+    if (bet > user.balance) {
+      toast({ title: 'Ошибка', description: 'Недостаточно средств', variant: 'destructive' });
+      return;
+    }
+    
+    setIsLoading(true);
+    try {
+      const response = await fetch(API_GAME, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user.id,
+          gameType: selectedGame.id,
+          betAmount: bet
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        toast({ title: 'Ошибка', description: data.error, variant: 'destructive' });
+        return;
+      }
+      
+      const updatedUser = { ...user, balance: data.newBalance };
+      setUser(updatedUser);
+      localStorage.setItem('casinoUser', JSON.stringify(updatedUser));
+      
+      if (data.won) {
+        toast({ 
+          title: '🎉 Выигрыш!', 
+          description: `+${data.winAmount.toFixed(2)}₽ | Баланс: ${data.newBalance.toFixed(2)}₽`,
+          duration: 5000
+        });
+      } else {
+        toast({ 
+          title: '😔 Проигрыш', 
+          description: `${data.balanceChange.toFixed(2)}₽ | Баланс: ${data.newBalance.toFixed(2)}₽`,
+          variant: 'destructive',
+          duration: 5000
+        });
+      }
+      
+      setSelectedGame(null);
+      setBetAmount('');
+    } catch (error) {
+      toast({ title: 'Ошибка', description: 'Не удалось выполнить ставку', variant: 'destructive' });
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -89,7 +227,6 @@ export default function Index() {
           <nav className="hidden md:flex items-center gap-6">
             <a href="#games" className="text-foreground/80 hover:text-primary transition-colors">Игры</a>
             <a href="#profile" className="text-foreground/80 hover:text-primary transition-colors">Профиль</a>
-            <a href="#deposit" className="text-foreground/80 hover:text-primary transition-colors">Пополнение</a>
             <a href="#rules" className="text-foreground/80 hover:text-primary transition-colors">Правила</a>
           </nav>
 
@@ -97,9 +234,9 @@ export default function Index() {
             <div className="flex items-center gap-4">
               <div className="text-right hidden sm:block">
                 <div className="text-sm text-muted-foreground">{user.username}</div>
-                <div className="text-lg font-bold text-primary">{user.balance}₽</div>
+                <div className="text-lg font-bold text-primary">{user.balance.toFixed(2)}₽</div>
               </div>
-              <Button onClick={() => setUser(null)} variant="outline" size="sm">
+              <Button onClick={handleLogout} variant="outline" size="sm">
                 <Icon name="LogOut" size={16} />
               </Button>
             </div>
@@ -163,7 +300,7 @@ export default function Index() {
                   </div>
                   <div className="p-4 bg-muted/30 rounded-lg">
                     <div className="text-sm text-muted-foreground mb-1">Баланс</div>
-                    <div className="text-2xl font-bold text-primary">{user.balance}₽</div>
+                    <div className="text-2xl font-bold text-primary">{user.balance.toFixed(2)}₽</div>
                   </div>
                 </div>
               </Card>
@@ -199,7 +336,11 @@ export default function Index() {
                       />
                     </div>
                     <div className="flex items-end">
-                      <Button onClick={handleAddBalance} className="w-full bg-secondary hover:bg-secondary/90">
+                      <Button 
+                        onClick={handleAddBalance} 
+                        disabled={isLoading}
+                        className="w-full bg-secondary hover:bg-secondary/90"
+                      >
                         <Icon name="Plus" size={16} className="mr-2" />
                         Начислить
                       </Button>
@@ -208,26 +349,6 @@ export default function Index() {
                 </Card>
               </section>
             )}
-
-            <section id="deposit" className="mb-16">
-              <Card className="bg-card/80 backdrop-blur-sm border-primary/20 p-8">
-                <h2 className="text-3xl font-bold mb-6 text-primary flex items-center gap-3">
-                  <Icon name="Wallet" size={32} />
-                  Пополнение
-                </h2>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {[100, 500, 1000, 5000].map((amount) => (
-                    <Button 
-                      key={amount}
-                      className="h-20 text-xl font-bold premium-gradient text-background"
-                      onClick={() => toast({ title: '💳 Пополнение', description: `${amount}₽ в обработке` })}
-                    >
-                      {amount}₽
-                    </Button>
-                  ))}
-                </div>
-              </Card>
-            </section>
           </>
         )}
 
@@ -252,23 +373,47 @@ export default function Index() {
         <DialogContent className="bg-card border-primary/30">
           <DialogHeader>
             <DialogTitle className="text-2xl text-primary gold-glow">Вход в казино</DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              {authMode === 'login' ? 'Войдите в существующий аккаунт' : 'Создайте новый аккаунт'}
+            </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4 pt-4">
-            <div>
-              <Label htmlFor="username">Никнейм</Label>
-              <Input 
-                id="username"
-                placeholder="Введите никнейм"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleAuth()}
-                className="bg-muted/30"
-              />
-            </div>
-            <Button onClick={handleAuth} className="w-full premium-gradient text-background font-semibold">
-              Войти в игру
-            </Button>
-          </div>
+          <Tabs value={authMode} onValueChange={(v) => setAuthMode(v as 'login' | 'register')}>
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="login">Вход</TabsTrigger>
+              <TabsTrigger value="register">Регистрация</TabsTrigger>
+            </TabsList>
+            <TabsContent value={authMode} className="space-y-4 pt-4">
+              <div>
+                <Label htmlFor="username">Никнейм</Label>
+                <Input 
+                  id="username"
+                  placeholder="Введите никнейм"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="bg-muted/30"
+                />
+              </div>
+              <div>
+                <Label htmlFor="password">Пароль</Label>
+                <Input 
+                  id="password"
+                  type="password"
+                  placeholder="Введите пароль"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleAuth()}
+                  className="bg-muted/30"
+                />
+              </div>
+              <Button 
+                onClick={handleAuth} 
+                disabled={isLoading}
+                className="w-full premium-gradient text-background font-semibold"
+              >
+                {isLoading ? 'Загрузка...' : authMode === 'login' ? 'Войти' : 'Зарегистрироваться'}
+              </Button>
+            </TabsContent>
+          </Tabs>
         </DialogContent>
       </Dialog>
 
@@ -284,20 +429,27 @@ export default function Index() {
             <div className="space-y-4 pt-4">
               <p className="text-muted-foreground">{selectedGame.description}</p>
               <div className="p-4 bg-muted/30 rounded-lg">
-                <div className="text-sm text-muted-foreground mb-2">Минимальная ставка</div>
-                <div className="text-2xl font-bold text-primary">{selectedGame.minBet}₽</div>
+                <div className="text-sm text-muted-foreground mb-2">Ваш баланс</div>
+                <div className="text-2xl font-bold text-primary">{user?.balance.toFixed(2)}₽</div>
+              </div>
+              <div>
+                <Label htmlFor="betAmount">Ставка (мин. {selectedGame.minBet}₽)</Label>
+                <Input 
+                  id="betAmount"
+                  type="number"
+                  placeholder={`${selectedGame.minBet}`}
+                  value={betAmount}
+                  onChange={(e) => setBetAmount(e.target.value)}
+                  className="bg-muted/30"
+                  min={selectedGame.minBet}
+                />
               </div>
               <Button 
+                onClick={handlePlayGame}
+                disabled={isLoading}
                 className="w-full premium-gradient text-background font-semibold"
-                onClick={() => {
-                  toast({ 
-                    title: '🎮 Игра запускается...', 
-                    description: 'Функционал в разработке' 
-                  });
-                  setSelectedGame(null);
-                }}
               >
-                Играть
+                {isLoading ? 'Игра...' : 'Играть'}
               </Button>
             </div>
           </DialogContent>

@@ -1,0 +1,19 @@
+{
+  "tests": [
+    {
+      "name": "Add balance as admin",
+      "method": "POST",
+      "body": {
+        "adminId": "IDADMIN001",
+        "targetUserId": "IDUSER001",
+        "amount": 500
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "success": true,
+        "amountAdded": 500
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}
